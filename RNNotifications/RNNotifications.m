@@ -243,19 +243,33 @@ RCT_EXPORT_MODULE()
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler
 {
     NSString* identifier = response.actionIdentifier;
+    NSDictionary* userInfo = response.notification.request.content.userInfo;
+
+    // Check if this is a DEFAULT action (user tapped notification itself)
+    if ([identifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+        if ([RNNotificationsBridgeQueue sharedInstance].jsIsReady) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self checkAndSendEvent:RNNotificationOpened body:userInfo];
+            });
+        } else {
+            [[RNNotificationsBridgeQueue sharedInstance] postNotification:userInfo];
+        }
+
+        completionHandler();
+        return;
+    }
+
     NSString* completionKey = [NSString stringWithFormat:@"%@.%@", identifier, [NSString stringWithFormat:@"%ld", (long)[[NSDate date] timeIntervalSince1970]]];
     NSMutableDictionary* info = [[NSMutableDictionary alloc] initWithDictionary:@{ @"identifier": identifier, @"completionKey": completionKey }];
     
-    // add text
+    // If notification has a TextInput, add its text to our info
     if ([response isKindOfClass:[UNTextInputNotificationResponse class]]) {
         NSString* text = ((UNTextInputNotificationResponse*)response).userText;
         if (text != NULL) {
             info[@"text"] = text;
         }
     }
-    
-    NSDictionary* userInfo = response.notification.request.content.userInfo;
-    
+        
     // add notification custom data
     if (userInfo != NULL) {
         info[@"notification"] = userInfo;
@@ -265,7 +279,7 @@ RCT_EXPORT_MODULE()
     [[RNNotificationsBridgeQueue sharedInstance] postAction:info withCompletionKey:completionKey andCompletionHandler:completionHandler];
     
     if ([RNNotificationsBridgeQueue sharedInstance].jsIsReady == YES) {
-        [self checkAndSendEvent:RNNotificationActionTriggered body:info];
+        [self checkAndSendEvent:RNNotificationActionReceived body:info];
         completionHandler();
     } else {
         [RNNotificationsBridgeQueue sharedInstance].openedLocalNotification = info;
@@ -304,12 +318,13 @@ RCT_EXPORT_MODULE()
     {
         case (int)UIApplicationStateActive:
             [self checkAndSendEvent:RNNotificationReceivedForeground body:userInfo];
-            
+            break;
         case (int)UIApplicationStateInactive:
             [self checkAndSendEvent:RNNotificationOpened body:userInfo];
-            
+            break;
         default:
             [self checkAndSendEvent:RNNotificationReceivedBackground body:userInfo];
+            break;
     }
 }
 
